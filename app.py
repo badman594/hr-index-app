@@ -138,35 +138,50 @@ btn_calc = st.button("🚀 Рассчитать прогноз по ИИ")
 
 # Логика предпроверки строки ввода
 if btn_calc:
-    # Очищаем от лишних пробелов по краям
     clean_keyword = prof_keyword.strip()
     
-    if len(clean_keyword) < 3:
-        st.warning("⚠️ Пожалуйста, введите корректное название профессии (минимум 3 символа) перед запуском анализа.")
+    # 1. Защита от слишком коротких и бессмысленных слов
+    if len(clean_keyword) < 4:
+        st.warning("⚠️ Пожалуйста, введите корректное и полное название профессии (минимум 4 символа).")
     else:
-        with st.spinner(f'Выполняю предпредиктный запрос для "{clean_keyword}"...'):
-            sim_base_vacancies = get_hh_vacancies_count(clean_keyword, selected_area_id, exp_api_value, "Тестировщик")
+        with st.spinner(f'Выполняю реальный запрос на HH.ru для "{clean_keyword}"...'):
             
-            # Расчет будущего
-            sim_future_vacancies = int(sim_base_vacancies * ((1.0 - (ai_risk/100)) ** horizon))
-            if sim_future_vacancies < 1:
-                sim_future_vacancies = 1
+            # Изменяем логику: для симулятора передаем специальный маркер, чтобы не брать ложный бэкап
+            url = "https://hh.ru"
+            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            params = {"text": clean_keyword, "area": selected_area_id, "experience": exp_api_value, "per_page": 1}
+            
+            try:
+                response = requests.get(url, headers=headers, params=params, timeout=5)
+                sim_base_vacancies = response.json().get("found", 0) if response.status_code == 200 else 0
+            except Exception:
+                sim_base_vacancies = 0
 
-            sim_resumes = int(sim_base_vacancies * 3.5)
-            if horizon > 0:
-                sim_resumes = int(sim_resumes * (1.1 ** horizon))
-
-            sim_index, sim_status, alert_type = get_status_logic(sim_future_vacancies, sim_resumes, v_students)
-
-            st.subheader(f"Результат симуляции для '{clean_keyword}' к моменту выпуска:")
-            st.markdown(f"* Вакансий сейчас на рынке: **{sim_base_vacancies}** ➔ Ожидается через {horizon} лет: **{sim_future_vacancies}**")
-            st.markdown(f"* Прогнозный Индекс Нужности: **{sim_index}**")
-
-            if alert_type == "success":
-                st.success(sim_status)
-            elif alert_type == "warning":
-                st.warning(sim_status)
+            # 2. Если HH честно вернул 0 — значит такой профессии нет, останавливаем расчет
+            if sim_base_vacancies == 0:
+                st.error(f"❌ Профессия '{clean_keyword}' не найдена в базе вакансий HeadHunter для региона {selected_city}. Проверьте правильность написания.")
             else:
-                st.error(sim_status)
+                # Расчет будущего, если вакансии реально найдены
+                sim_future_vacancies = int(sim_base_vacancies * ((1.0 - (ai_risk/100)) ** horizon))
+                if sim_future_vacancies < 1:
+                    sim_future_vacancies = 1
+
+                sim_resumes = int(sim_base_vacancies * 3.5)
+                if horizon > 0:
+                    sim_resumes = int(sim_resumes * (1.1 ** horizon))
+
+                sim_index, sim_status, alert_type = get_status_logic(sim_future_vacancies, sim_resumes, v_students)
+
+                st.subheader(f"Результат симуляции для '{clean_keyword}' к моменту выпуска:")
+                st.markdown(f"* Вакансий сейчас на рынке: **{sim_base_vacancies}** ➔ Ожидается через {horizon} лет: **{sim_future_vacancies}**")
+                st.markdown(f"* Прогнозный Индекс Нужности: **{sim_index}**")
+
+                if alert_type == "success":
+                    st.success(sim_status)
+                elif alert_type == "warning":
+                    st.warning(sim_status)
+                else:
+                    st.error(sim_status)
+
 else:
     st.info("💡 Введите название интересующей профессии выше и нажмите кнопку «Рассчитать прогноз по ИИ», чтобы запустить симуляцию.")
