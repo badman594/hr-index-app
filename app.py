@@ -25,9 +25,7 @@ FALLBACK_DATA = {
     "between3And6": {"Юрист": 680, "Тестировщик": 920, "Копирайтер": 510, "Информационная безопасность": 1150, "Data Scientist": 980}
 }
 
-# Базовые ИИ-риски и тренды для профессий (на основе статьи Forbes)
-# ai_impact: какой % вакансий ИИ уничтожает за 1 год (минус)
-# market_growth: на какой % растет спрос за 1 год благодаря технологиям (плюс)
+# Базовые ИИ-риски и тренды для профессий
 PROFEESION_TRENDS = {
     "Юрист (Правоведение)": {"ai_impact": 0.15, "market_growth": 0.02},
     "Тестировщик ПО": {"ai_impact": 0.12, "market_growth": 0.05},
@@ -75,15 +73,10 @@ exp_api_value = "noExperience" if selected_exp == "Без опыта (Junior)" e
 
 st.sidebar.markdown("---")
 st.sidebar.header("⏳ Временной горизонт")
-# Главная фича: выбор горизонта планирования
-horizon = st.sidebar.slider("Горизонт планирования (лет до выпуска):", min_value=0, max_value=4, value=0, help="0 — ситуация прямо сейчас. 4 — прогноз к моменту выпуска бакалавров.")
+horizon = st.sidebar.slider("Горизонт планирования (лет до выпуска):", min_value=0, max_value=4, value=0)
 
-# --- РАСЧЕТ ПРОГНОЗА ---
+# --- РАСЧЕТ ПРОГНОЗА ПО ГОТОВЫМ НАПРАВЛЕНИЯМ ---
 st.header(f"📊 Прогноз востребованности через {horizon} л. ({selected_city})")
-if horizon > 0:
-    st.info(f"🔮 Включен режим предиктивного анализа. Модель рассчитывает падение вакансий из-за ИИ и прирост за счет цифровизации к {2026 + horizon} году.")
-else:
-    st.caption("Отображаются текущие «сырые» данные рынка труда на сегодняшний день.")
 
 professions_config = [
     {"name": "Юрист (Правоведение)", "query": "Юрист", "fb_key": "Юрист", "resumes_est": 850, "students": 300},
@@ -97,28 +90,21 @@ dynamic_results = []
 
 with st.spinner('Расчет прогностических моделей...'):
     for prof in professions_config:
-        # 1. Получаем текущие вакансии из API
         base_vacancies = get_hh_vacancies_count(prof["query"], selected_area_id, exp_api_value, prof["fb_key"])
-        
-        # 2. Применяем горизонт планирования (математика будущего)
         trends = PROFEESION_TRENDS.get(prof["name"], PROFEESION_TRENDS["Дефолт"])
         
-        # Считаем, сколько вакансий останется/появится: Вакансии * (1 - Риск_ИИ + Рост_Рынка)^Лет
         yearly_factor = 1.0 - trends["ai_impact"] + trends["market_growth"]
         predicted_vacancies = int(base_vacancies * (yearly_factor ** horizon))
         if predicted_vacancies < 1:
             predicted_vacancies = 1
             
-        # Корректируем базовые резюме под регион
         regional_coef = 0.4 if selected_city != "Москва" else 1.0
         current_resumes = int(prof["resumes_est"] * regional_coef)
         current_students = int(prof["students"] * regional_coef)
         
-        # Если это будущее, количество ищущих работу (резюме) обычно растет за счет прошлых выпусков
         if horizon > 0:
             current_resumes = int(current_resumes * (1.1 ** horizon))
         
-        # Считаем прогнозный индекс
         val, status, _ = get_status_logic(predicted_vacancies, current_resumes, current_students)
         
         dynamic_results.append({
@@ -134,37 +120,53 @@ st.table(df_dynamic)
 
 st.markdown("---")
 
-# --- ИНТЕРАКТИВНЫЙ СИМУЛЯТОР С УЧЕТОМ ИИ ---
+# --- ИНТЕРАКТИВНЫЙ СИМУЛЯТОР С ПРЕДПРОВЕРКОЙ ВВОДА ---
 st.header("🎛️ Симулятор влияния ИИ на специальность")
 st.caption("Проверьте любую профессию на устойчивость к искусственному интеллекту.")
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    prof_keyword = st.text_input("Профессия для теста:", "Дизайнер")
+    # Изначально строка пустая, чтобы спровоцировать осознанный ввод со стороны пользователя
+    prof_keyword = st.text_input("Профессия для теста (например: Бухгалтер, Дизайнер):", value="")
 with col2:
     ai_risk = st.slider("Уровень угрозы со стороны ИИ (% замещения задач в год):", 0, 50, 15)
 with col3:
     v_students = st.slider("План набора студентов на 1 курс:", 10, 300, 60)
 
-sim_base_vacancies = get_hh_vacancies_count(prof_keyword, selected_area_id, exp_api_value, "Тестировщик")
-# Прогноз падения вакансий в симуляторе для 4-х лет обучения
-sim_future_vacancies = int(sim_base_vacancies * ((1.0 - (ai_risk/100)) ** horizon))
-if sim_future_vacancies < 1:
-    sim_future_vacancies = 1
+# Кнопка для старта — запрос к API пойдет только после её нажатия
+btn_calc = st.button("🚀 Рассчитать прогноз по ИИ")
 
-sim_resumes = int(sim_base_vacancies * 3.5)
-if horizon > 0:
-    sim_resumes = int(sim_resumes * (1.1 ** horizon))
+# Логика предпроверки строки ввода
+if btn_calc:
+    # Очищаем от лишних пробелов по краям
+    clean_keyword = prof_keyword.strip()
+    
+    if len(clean_keyword) < 3:
+        st.warning("⚠️ Пожалуйста, введите корректное название профессии (минимум 3 символа) перед запуском анализа.")
+    else:
+        with st.spinner(f'Выполняю предпредиктный запрос для "{clean_keyword}"...'):
+            sim_base_vacancies = get_hh_vacancies_count(clean_keyword, selected_area_id, exp_api_value, "Тестировщик")
+            
+            # Расчет будущего
+            sim_future_vacancies = int(sim_base_vacancies * ((1.0 - (ai_risk/100)) ** horizon))
+            if sim_future_vacancies < 1:
+                sim_future_vacancies = 1
 
-sim_index, sim_status, alert_type = get_status_logic(sim_future_vacancies, sim_resumes, v_students)
+            sim_resumes = int(sim_base_vacancies * 3.5)
+            if horizon > 0:
+                sim_resumes = int(sim_resumes * (1.1 ** horizon))
 
-st.subheader(f"Результат симуляции к моменту выпуска:")
-st.markdown(f"* Вакансий сейчас: **{sim_base_vacancies}** ➔ Ожидается через {horizon} лет: **{sim_future_vacancies}** (из-за ИИ)")
-st.markdown(f"* Прогнозный Индекс Нужности: **{sim_index}**")
+            sim_index, sim_status, alert_type = get_status_logic(sim_future_vacancies, sim_resumes, v_students)
 
-if alert_type == "success":
-    st.success(sim_status)
-elif alert_type == "warning":
-    st.warning(sim_status)
+            st.subheader(f"Результат симуляции для '{clean_keyword}' к моменту выпуска:")
+            st.markdown(f"* Вакансий сейчас на рынке: **{sim_base_vacancies}** ➔ Ожидается через {horizon} лет: **{sim_future_vacancies}**")
+            st.markdown(f"* Прогнозный Индекс Нужности: **{sim_index}**")
+
+            if alert_type == "success":
+                st.success(sim_status)
+            elif alert_type == "warning":
+                st.warning(sim_status)
+            else:
+                st.error(sim_status)
 else:
-    st.error(sim_status)
+    st.info("💡 Введите название интересующей профессии выше и нажмите кнопку «Рассчитать прогноз по ИИ», чтобы запустить симуляцию.")
