@@ -19,7 +19,6 @@ REGIONS = {
     "Екатеринбург": "3"
 }
 
-# Оставляем тренды для известных системе базовых групп, остальные получат "Дефолт"
 PROFESSION_TRENDS = {
     "Юрист": {"ai_impact": 0.15, "market_growth": 0.02},
     "Тестировщик": {"ai_impact": 0.12, "market_growth": 0.05},
@@ -31,31 +30,24 @@ PROFESSION_TRENDS = {
 }
 
 # ==========================================
-# ЧАСТЬ 2: ФУНКЦИИ ЛОГИКИ И API
+# ЧАСТЬ 2: ФУНКЦИИ ЛОГИКИ И API (ОЧИЩЕННАЯ ВЕРСИЯ)
 # ==========================================
 
-def get_hh_vacancies_smart(keyword, area_id, experience=None):
-    url = "https://hh.ru"
+def get_hh_vacancies(keyword, area_id, experience=None):
+    """Прямой и надежный запрос к API без внутренних скрытых сбросов параметров"""
+    url = "https://api.hh.ru/vacancies"
     headers = {
         "User-Agent": "PredictiveJobMarketApp/1.0 (your_email@example.com)"
     }
     
-    params = {"text": keyword, "area": area_id, "per_page": 1}
+    params = {"text": keyword.strip().lower(), "area": area_id, "per_page": 1}
     if experience:
         params["experience"] = experience
         
     try:
         response = requests.get(url, headers=headers, params=params, timeout=5)
         if response.status_code == 200:
-            found = response.json().get("found", 0)
-            if found > 0:
-                return found
-                
-        if experience:
-            params.pop("experience", None)
-            response = requests.get(url, headers=headers, params=params, timeout=5)
-            if response.status_code == 200:
-                return response.json().get("found", 0)
+            return response.json().get("found", 0)
     except Exception:
         pass
     return 0
@@ -83,12 +75,12 @@ exp_api_value = "noExperience" if selected_exp == "Без опыта (Junior)" e
 horizon = st.sidebar.slider("Горизонт прогнозирования (лет):", min_value=1, max_value=10, value=5)
 
 # ==========================================
-# ЧАСТЬ 3: ИНТЕРФЕЙС ВВОДА ПРОФЕССИИ
+# ЧАСТЬ 3: ИНТЕРФЕЙС И УМНАЯ ОБРАБОТКА ВВОДА
 # ==========================================
 st.header("🔍 Интеллектуальный анализ профессии")
 st.caption("Введите название интересующей специальности, чтобы запустить сквозной поиск по реальному рынку труда.")
 
-prof_keyword = st.text_input("Профессия для анализа (например: Бухгалтер, Дизайнер, Системный аналитик):", value="")
+prof_keyword = st.text_input("Профессия для анализа (например: Бухгалтер, Сварщик, Системный аналитик):", value="")
 btn_calc = st.button("🚀 Запустить предиктивный расчет")
 
 if btn_calc:
@@ -97,64 +89,68 @@ if btn_calc:
     if len(clean_keyword) < 3:
         st.warning("⚠️ Пожалуйста, введите корректное название профессии (минимум 3 символа).")
     else:
-        with st.spinner(f'Сбор живых данных из hh.ru и расчет трендов для "{clean_keyword}"...'):
+        with st.spinner(f'Сбор живых данных из hh.ru для "{clean_keyword}"...'):
             
-            # 1. Получаем реальные данные с API HeadHunter
-            base_vacancies = get_hh_vacancies_smart(clean_keyword, selected_area_id, exp_api_value)
+            # 1. Сначала ищем строго с выбранным фильтром опыта
+            base_vacancies = get_hh_vacancies(clean_keyword, selected_area_id, exp_api_value)
+            using_fallback_exp = False
             
+            # 2. Умный откат: Если с фильтром опыта нашли 0 (как со Сварщиком Junior), ищем по всему рынку профессии
             if base_vacancies == 0:
-                st.error(f"❌ Профессия '{clean_keyword}' не найдена на рынке труда в регионе {selected_city}. Проверьте правильность написания.")
+                base_vacancies = get_hh_vacancies(clean_keyword, selected_area_id, experience=None)
+                using_fallback_exp = True
+            
+            # 3. Если даже без опыта на всем рынке найдено 0 — значит профессии реально нет в регионе
+            if base_vacancies == 0:
+                st.error(f"❌ Профессия '{clean_keyword}' вообще не найдена на рынке труда в регионе {selected_city}. Проверьте правильность написания.")
             else:
-                # 2. Определяем ИИ-тренды (ищем точное совпадение или даем Дефолт)
+                # Если сработал откат, вежливо предупреждаем пользователя в интерфейсе
+                if using_fallback_exp:
+                    st.warning(f"💡 Вакансий строго для уровня '{selected_exp}' не найдено. Расчет автоматически переведен на общую емкость рынка для профессии '{clean_keyword}'.")
+
+                # 4. Определяем ИИ-тренды
                 trends = PROFESSION_TRENDS.get(clean_keyword, PROFESSION_TRENDS["Дефолт"])
                 yearly_factor = 1.0 - trends["ai_impact"] + trends["market_growth"]
                 
-                # 3. Генерируем массив данных по годам для графика
+                # 5. Генерируем массивы данных по годам для графиков
                 years_list = list(range(0, horizon + 1))
                 vacancies_trend = []
                 competition_trend = []
                 
-                # Эмпирический расчет базового объема резюме и студентов на основе текущего рынка
                 regional_coef = 0.4 if selected_city != "Москва" else 1.0
                 base_resumes = int(base_vacancies * 4 * regional_coef)
                 base_students = int(base_vacancies * 1.5 * regional_coef)
                 
                 for year in range(0, horizon + 1):
-                    # Моделируем вакансии
                     v_year = int(base_vacancies * (yearly_factor ** year))
                     vacancies_trend.append(max(1, v_year))
                     
-                    # Моделируем соискателей (рост резюме + студенты)
                     res_year = int(base_resumes * (1.1 ** year)) if year > 0 else base_resumes
                     stud_year = int(base_students * (1.05 ** year)) if year > 0 else base_students
                     competition_trend.append(res_year + stud_year)
 
-                # Итоговые параметры на конец горизонта планирования
                 predicted_vacancies = vacancies_trend[-1]
                 final_resumes = int(base_resumes * (1.1 ** horizon)) if horizon > 0 else base_resumes
                 final_students = int(base_students * (1.05 ** horizon)) if horizon > 0 else base_students
                 
                 val, status, alert_type = get_status_logic(predicted_vacancies, final_resumes, final_students)
                 
-                # 4. Формируем динамическую таблицу (Dataframe)
+                # 6. Формируем и выводим динамическую таблицу
                 dynamic_results = [{
                     "Параметр": f"Анализ для '{clean_keyword}' ({selected_city})",
-                    "Текущие вакансии (HH)": base_vacancies,
+                    "Текущие базовые вакансии": base_vacancies,
                     f"Прогноз вакансий через {horizon} л.": predicted_vacancies,
                     "Индекс Нужности": "⚠️ Бесконечен" if val == 999.0 else val,
                     "Рекомендация для Вуза": status
                 }]
                 df_dynamic = pd.DataFrame(dynamic_results)
                 
-                # ==========================================
-                # ЧАСТЬ 4: ВЫВОД РЕЗУЛЬТАТОВ НА ЭКРАН
-                # ==========================================
                 st.markdown("---")
                 st.subheader(f"📊 Результаты стратегического прогноза через {horizon} лет:")
                 st.dataframe(df_dynamic, use_container_width=True)
                 
-                # Вывод графиков во вкладках
-                tab1, tab2 = st.tabs(["📈 График баланса рынка", "📉 Только динамика вакансий"])
+                # Вывод интерактивных графиков
+                tab1, tab2 = st.tabs(["📈 График баланса рынка", "📉 Динамика вакансий"])
                 
                 with tab1:
                     st.caption("Сравнение падения спроса (вакансии под ИИ) и роста предложения (резюме + студенты):")
@@ -173,7 +169,6 @@ if btn_calc:
                     }).set_index("Год")
                     st.line_chart(df_vac_chart)
                 
-                # Дублируем главное решение крупным цветным блоком внизу
                 if alert_type == "success":
                     st.success(f"**Итоговый вердикт:** {status}")
                 elif alert_type == "warning":
