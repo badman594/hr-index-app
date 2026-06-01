@@ -30,59 +30,133 @@ PROFESSION_TRENDS = {
     "Дефолт":                     {"ai_impact": 0.08, "market_growth": 0.05},
 }
 
-INDEX_HELP = (
-    "Индекс нужности = (резюме + студенты) / вакансии. "
-    "Значение < 2 — острая нехватка кадров, рекомендуется увеличить набор. "
-    "2–5 — рынок сбалансирован. "
-    "> 5 — избыток соискателей, высок риск безработицы среди выпускников."
-)
+# ==========================================
+# СПРАВОЧНИК ПЛОТНОСТИ РЫНКА ПО ПРОФЕССИЯМ
+# (резюме / вакансия)
+# ==========================================
+PROFESSION_MARKET_DENSITY = {
+    # IT и технологии
+    "разработчик":              1.2,
+    "программист":              1.2,
+    "data scientist":           1.1,
+    "аналитик данных":          1.3,
+    "тестировщик":              1.5,
+    "devops":                   1.1,
+    "информационная безопасность": 1.0,
+    "системный аналитик":       1.4,
+    # Юриспруденция
+    "юрист":                    8.5,
+    "адвокат":                  7.0,
+    "юрисконсульт":             7.5,
+    # Административные профессии
+    "администратор":            6.0,
+    "офис-менеджер":            6.5,
+    "секретарь":                7.0,
+    # Экономика и финансы
+    "бухгалтер":                5.5,
+    "экономист":                5.0,
+    "финансист":                4.5,
+    # Маркетинг и контент
+    "маркетолог":               4.0,
+    "копирайтер":               4.5,
+    "smm":                      5.0,
+    # Медицина
+    "врач":                     2.0,
+    "медсестра":                1.8,
+    "фармацевт":                3.0,
+    # Строительство и производство
+    "сварщик":                  2.0,
+    "инженер":                  2.5,
+    "строитель":                2.8,
+}
+
+DEFAULT_MARKET_DENSITY = 4.0  # коэффициент по умолчанию, если профессия не найдена
+
 
 # ==========================================
-# ЧАСТЬ 2: ФУНКЦИИ ЛОГИКИ И API
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
 # ==========================================
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def get_hh_vacancies(keyword: str, area_id: str, experience: str | None = None) -> tuple[int, str]:
+def _get_market_density_coefficient(keyword: str) -> float:
     """
-    Возвращает (количество_вакансий, источник).
-    источник: 'live' | 'fallback_exp' | 'simulated'
+    Возвращает коэффициент резюме/вакансия из справочника PROFESSION_MARKET_DENSITY.
+    Поиск ведётся по частичному вхождению (регистронезависимо).
+    Если профессия не найдена — возвращает DEFAULT_MARKET_DENSITY.
+    """
+    kw_lower = keyword.strip().lower()
+    for profession, coef in PROFESSION_MARKET_DENSITY.items():
+        if profession in kw_lower or kw_lower in profession:
+            return coef
+    return DEFAULT_MARKET_DENSITY
+
+
+def _get_hh_resume_count(keyword: str, area_id: str) -> int | None:
+    """
+    Option A: запрос к HH API для получения числа активных резюме по ключевому слову.
+    Endpoint GET /resumes требует OAuth — при ошибке доступа (401/403)
+    или любом сетевом сбое возвращает None (триггер для перехода к Option B).
+    """
+    url = "https://api.hh.ru/resumes"
+    headers = {"User-Agent": "PredictiveJobMarketApp/1.0 (your_email@example.com)"}
+    params = {
+        "text": keyword.strip(),
+        "area": area_id,
+        "per_page": 1,
+        "status": "active",
+    }
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=5)
+        if response.status_code == 200:
+            found = response.json().get("found")
+            if found is not None and found > 0:
+                return int(found)
+        # 401 / 403 — нет авторизации; любой другой код — API недоступен
+        return None
+    except Exception:
+        return None
+
+
+def get_hh_vacancies(keyword, area_id, experience=None):
+    """
+    Возвращает количество вакансий с HH API по ключевому слову, региону и уровню опыта.
     """
     url = "https://api.hh.ru/vacancies"
-    headers = {"User-Agent": "PredictiveJobMarketApp/1.0"}
-    base_params = {"text": keyword.strip(), "area": area_id, "per_page": 1}
-
-    def _fetch(params: dict) -> int:
-        try:
-            resp = requests.get(url, headers=headers, params=params, timeout=7)
-            resp.raise_for_status()
-            return resp.json().get("found", 0)
-        except requests.exceptions.Timeout:
-            st.warning("⏱ API hh.ru не ответил вовремя. Используем симуляцию.")
-        except requests.exceptions.ConnectionError:
-            st.error("🌐 Нет соединения с интернетом. Используем симуляцию.")
-        except requests.exceptions.HTTPError as e:
-            st.warning(f"⚠️ Ошибка API hh.ru: {e}. Используем симуляцию.")
-        except Exception as e:
-            st.warning(f"⚠️ Неизвестная ошибка: {e}. Используем симуляцию.")
-        return -1  # сигнал об ошибке сети
-
-    # Попытка 1: с фильтром опыта
+    headers = {"User-Agent": "PredictiveJobMarketApp/1.0 (your_email@example.com)"}
+    search_text = keyword.strip()
+    params = {"text": search_text, "area": area_id, "per_page": 1}
     if experience:
-        result = _fetch({**base_params, "experience": experience})
-        if result > 0:
-            return result, "live"
-        if result == -1:
-            return 120, "simulated"
+        params["experience"] = experience
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=5)
+        if response.status_code == 200:
+            return response.json().get("found", 0)
+    except Exception:
+        pass
+    return 0
 
-    # Попытка 2: без фильтра опыта
-    result = _fetch(base_params)
-    if result > 0:
-        return result, "fallback_exp"
-    if result == -1:
-        return 120, "simulated"
 
-    # Попытка 3: данные реально нулевые или скрыты
-    return 120, "simulated"
+def get_resume_estimate(keyword: str, area_id: str, base_vacancies: int) -> tuple[int, str]:
+    """
+    Определяет расчётное количество резюме по двухуровневой стратегии:
+
+      Option A — живые данные из HH API (GET /resumes).
+                 Если API вернул корректное число > 0 — используем его.
+
+      Option B — если API недоступен / требует авторизации:
+                 применяем коэффициент из PROFESSION_MARKET_DENSITY.
+                 Если профессия не в справочнике — коэффициент = DEFAULT_MARKET_DENSITY (4.0).
+
+    Возвращает: (количество_резюме, описание_источника_для_логов).
+    """
+    # --- Option A: HH API ---
+    hh_count = _get_hh_resume_count(keyword, area_id)
+    if hh_count is not None:
+        return hh_count, "source=hh_api_resumes"
+
+    # --- Option B: справочник плотности рынка ---
+    coef = _get_market_density_coefficient(keyword)
+    estimated = int(base_vacancies * coef)
+    return estimated, f"source=market_density, coef={coef}"
 
 
 def get_status_logic(vacancies: int, resumes: int, students: int) -> tuple[float, str, str]:
@@ -103,7 +177,10 @@ def build_forecast(
     horizon: int
 ) -> tuple[list[int], list[int], list[int]]:
     """Возвращает (vacancies_trend, resumes_trend, students_trend) по годам."""
-    base_resumes  = int(base_vacancies * 4   * regional_coef)
+
+base_resumes_raw, resume_source = get_resume_estimate(
+    clean_keyword, selected_area_id, base_vacancies)
+base_resumes = int(base_resumes_raw * regional_coef)
     base_students = int(base_vacancies * 1.5 * regional_coef)
 
     vacancies_trend, resumes_trend, students_trend = [], [], []
