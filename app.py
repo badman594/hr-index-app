@@ -86,7 +86,7 @@ prof_keyword = st.text_input("Профессия для анализа (напр
 btn_calc = st.button("🚀 Запустить предиктивный расчет")
 
 if btn_calc:
-   clean_keyword = prof_keyword.strip()
+    clean_keyword = prof_keyword.strip()
     
     if len(clean_keyword) < 3:
         st.warning("⚠️ Пожалуйста, введите корректное название профессии (минимум 3 символа).")
@@ -103,84 +103,83 @@ if btn_calc:
                 base_vacancies = get_hh_vacancies(clean_keyword, selected_area_id, experience=None)
                 using_fallback_exp = True
             
-            # 3. Откат 2 (Супер-бэкап): Если API HH всё равно выдает 0, генерируем синтетический объем рынка
+            # 3. Откат 2 (Супер-бэкап): Если API HH всё равно выдает 0, генерируем базовый объем
             if base_vacancies == 0:
-                # Берем условную базовую емкость рынка, чтобы симулятор не падал
                 base_vacancies = 120 
                 using_global_fallback = True
 
             # Выводим предупреждения в зависимости от того, какой откат сработал
             if using_global_fallback:
-                st.warning(f"📋 Из-за ограничений поиска API HeadHunter живые данные для '{clean_keyword}' временно недоступны. Включена предиктивная симуляция на основе среднерыночной емкости региона.")
+                st.warning(f"📋 Живые данные API HeadHunter для '{clean_keyword}' сейчас недоступны или скрыты. Включена предиктивная симуляция на основе среднерыночной емкости региона.")
             elif using_fallback_exp:
                 st.warning(f"💡 Вакансий строго для уровня '{selected_exp}' не найдено. Расчет автоматически переведен на общую емкость рынка для профессии '{clean_keyword}'.")
 
-                # 4. Определяем ИИ-тренды
-                trends = PROFESSION_TRENDS.get(clean_keyword, PROFESSION_TRENDS["Дефолт"])
-                yearly_factor = 1.0 - trends["ai_impact"] + trends["market_growth"]
+            # 4. Определяем ИИ-тренды
+            trends = PROFESSION_TRENDS.get(clean_keyword, PROFESSION_TRENDS["Дефолт"])
+            yearly_factor = 1.0 - trends["ai_impact"] + trends["market_growth"]
+            
+            # 5. Генерируем массивы данных по годам для графиков
+            years_list = list(range(0, horizon + 1))
+            vacancies_trend = []
+            competition_trend = []
+            
+            regional_coef = 0.4 if selected_city != "Москва" else 1.0
+            base_resumes = int(base_vacancies * 4 * regional_coef)
+            base_students = int(base_vacancies * 1.5 * regional_coef)
+            
+            for year in range(0, horizon + 1):
+                v_year = int(base_vacancies * (yearly_factor ** year))
+                vacancies_trend.append(max(1, v_year))
                 
-                # 5. Генерируем массивы данных по годам для графиков
-                years_list = list(range(0, horizon + 1))
-                vacancies_trend = []
-                competition_trend = []
-                
-                regional_coef = 0.4 if selected_city != "Москва" else 1.0
-                base_resumes = int(base_vacancies * 4 * regional_coef)
-                base_students = int(base_vacancies * 1.5 * regional_coef)
-                
-                for year in range(0, horizon + 1):
-                    v_year = int(base_vacancies * (yearly_factor ** year))
-                    vacancies_trend.append(max(1, v_year))
-                    
-                    res_year = int(base_resumes * (1.1 ** year)) if year > 0 else base_resumes
-                    stud_year = int(base_students * (1.05 ** year)) if year > 0 else base_students
-                    competition_trend.append(res_year + stud_year)
+                res_year = int(base_resumes * (1.1 ** year)) if year > 0 else base_resumes
+                stud_year = int(base_students * (1.05 ** year)) if year > 0 else base_students
+                competition_trend.append(res_year + stud_year)
 
-                predicted_vacancies = vacancies_trend[-1]
-                final_resumes = int(base_resumes * (1.1 ** horizon)) if horizon > 0 else base_resumes
-                final_students = int(base_students * (1.05 ** horizon)) if horizon > 0 else base_students
+            predicted_vacancies = vacancies_trend[-1]
+            final_resumes = int(base_resumes * (1.1 ** horizon)) if horizon > 0 else base_resumes
+            final_students = int(base_students * (1.05 ** horizon)) if horizon > 0 else base_students
+            
+            val, status, alert_type = get_status_logic(predicted_vacancies, final_resumes, final_students)
+            
+            # 6. Формируем и выводим динамическую таблицу
+            dynamic_results = [{
+                "Параметр": f"Анализ для '{clean_keyword}' ({selected_city})",
+                "Текущие базовые вакансии": base_vacancies,
+                f"Прогноз вакансий через {horizon} л.": predicted_vacancies,
+                "Индекс Нужности": "⚠️ Бесконечен" if val == 999.0 else val,
+                "Рекомендация для Вуза": status
+            }]
+            df_dynamic = pd.DataFrame(dynamic_results)
+            
+            st.markdown("---")
+            st.subheader(f"📊 Результаты стратегического прогноза через {horizon} лет:")
+            st.dataframe(df_dynamic, use_container_width=True)
+            
+            # Вывод интерактивных графиков
+            tab1, tab2 = st.tabs(["📈 График баланса рынка", "📉 Динамика вакансий"])
+            
+            with tab1:
+                st.caption("Сравнение падения спроса (вакансии под ИИ) и роста предложения (резюме + студенты):")
+                df_balance_chart = pd.DataFrame({
+                    "Год": years_list,
+                    "Доступные вакансии": vacancies_trend,
+                    "Общий поток соискателей": competition_trend
+                }).set_index("Год")
+                st.line_chart(df_balance_chart)
                 
-                val, status, alert_type = get_status_logic(predicted_vacancies, final_resumes, final_students)
-                
-                # 6. Формируем и выводим динамическую таблицу
-                dynamic_results = [{
-                    "Параметр": f"Анализ для '{clean_keyword}' ({selected_city})",
-                    "Текущие базовые вакансии": base_vacancies,
-                    f"Прогноз вакансий через {horizon} л.": predicted_vacancies,
-                    "Индекс Нужности": "⚠️ Бесконечен" if val == 999.0 else val,
-                    "Рекомендация для Вуза": status
-                }]
-                df_dynamic = pd.DataFrame(dynamic_results)
-                
-                st.markdown("---")
-                st.subheader(f"📊 Результаты стратегического прогноза через {horizon} лет:")
-                st.dataframe(df_dynamic, use_container_width=True)
-                
-                # Вывод интерактивных графиков
-                tab1, tab2 = st.tabs(["📈 График баланса рынка", "📉 Динамика вакансий"])
-                
-                with tab1:
-                    st.caption("Сравнение падения спроса (вакансии под ИИ) и роста предложения (резюме + студенты):")
-                    df_balance_chart = pd.DataFrame({
-                        "Год": years_list,
-                        "Доступные вакансии": vacancies_trend,
-                        "Общий поток соискателей": competition_trend
-                    }).set_index("Год")
-                    st.line_chart(df_balance_chart)
-                    
-                with tab2:
-                    st.caption(f"Чистый тренд изменения рабочих мест для '{clean_keyword}' по годам:")
-                    df_vac_chart = pd.DataFrame({
-                        "Год": years_list,
-                        "Вакансии": vacancies_trend
-                    }).set_index("Год")
-                    st.line_chart(df_vac_chart)
-                
-                if alert_type == "success":
-                    st.success(f"**Итоговый вердикт:** {status}")
-                elif alert_type == "warning":
-                    st.warning(f"**Итоговый вердикт:** {status}")
-                else:
-                    st.error(f"**Итоговый вердикт:** {status}")
+            with tab2:
+                st.caption(f"Чистый тренд изменения рабочих мест для '{clean_keyword}' по годам:")
+                df_vac_chart = pd.DataFrame({
+                    "Год": years_list,
+                    "Вакансии": vacancies_trend
+                }).set_index("Год")
+                st.line_chart(df_vac_chart)
+            
+            if alert_type == "success":
+                st.success(f"**Итоговый вердикт:** {status}")
+            elif alert_type == "warning":
+                st.warning(f"**Итоговый вердикт:** {status}")
+            else:
+                st.error(f"**Итоговый вердикт:** {status}")
 else:
     st.info("💡 Введите название любой профессии в поле выше и нажмите кнопку, чтобы построить живой прогноз рынка труда.")
