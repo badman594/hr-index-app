@@ -232,4 +232,18 @@ if btn_calc:
                 # Вывод текстовых результатов под графиком
                 st.subheader("Результаты симуляции:")
                 col_res1, col_res2 = st.columns(2)
-with col_res1:st.markdown(f"* Всего активных вакансий в регионе сейчас: {sim_base_vacancies}")with col_res2:display_index = "⚠️ Бесконечен (0 вакансий)" if sim_index == 999.0 else sim_indexst.markdown(f"* Прогнозный Индекс Нужности (через {horizon} л.): {display_index}")if alert_type == "success":st.success(sim_status)elif alert_type == "warning":st.warning(sim_status)else:st.error(sim_status)else:st.info("💡 Введите название профессии и нажмите кнопку для расчета прогноза.")
+with col_res1:
+    st.markdown(f"* Всего активных вакансий в регионе сейчас: {sim_base_vacancies}")
+    with col_res2:
+        display_index = "⚠️ Бесконечен (0 вакансий)" if sim_index == 999.0 else sim_index
+        st.markdown(f"* Прогнозный Индекс Нужности (через {horizon} л.):
+        {display_index}")
+        
+        if alert_type == "success":
+            st.success(sim_status)
+        elif alert_type == "warning":
+            st.warning(sim_status)
+        else:
+            st.error(sim_status)
+        else:
+        st.info("💡 Введите название профессии и нажмите кнопку для расчета прогноза.")
