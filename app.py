@@ -178,10 +178,9 @@ def build_forecast(
 ) -> tuple[list[int], list[int], list[int]]:
     """Возвращает (vacancies_trend, resumes_trend, students_trend) по годам."""
 
-base_resumes_raw, resume_source = get_resume_estimate(
-    clean_keyword, selected_area_id, base_vacancies
-)
-base_resumes = int(base_resumes_raw * regional_coef)
+    base_resumes_raw, resume_source = get_resume_estimate(
+    clean_keyword, selected_area_id, base_vacancies)
+    base_resumes = int(base_resumes_raw * regional_coef)
     base_students = int(base_vacancies * 1.5 * regional_coef)
 
     vacancies_trend, resumes_trend, students_trend = [], [], []
