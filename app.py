@@ -236,8 +236,7 @@ with col_res1:
     st.markdown(f"* Всего активных вакансий в регионе сейчас: {sim_base_vacancies}")
     with col_res2:
         display_index = "⚠️ Бесконечен (0 вакансий)" if sim_index == 999.0 else sim_index
-        st.markdown(f"* Прогнозный Индекс Нужности (через {horizon} л.):
-        {display_index}")
+        st.markdown(f"* Прогнозный Индекс Нужности (через {horizon} л.):{display_index}")
         
         if alert_type == "success":
             st.success(sim_status)
