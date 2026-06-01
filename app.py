@@ -18,14 +18,12 @@ REGIONS = {
     "Екатеринбург": "3"
 }
 
-# Бэкап-данные на случай сбоев API
+# Бэкап-данные на случай сбоев сети
 FALLBACK_DATA = {
     "noExperience": {"Юрист": 45, "Тестировщик": 80, "Копирайтер": 60, "Информационная безопасность": 210, "Data Scientist": 110},
-    "between1And3": {"Юрист": 320, "Тестировщик": 450, "Копирайтер": 280, "Информационная безопасность": 540, "Data Scientist": 410},
-    "between3And6": {"Юрист": 680, "Тестировщик": 920, "Копирайтер": 510, "Информационная безопасность": 1150, "Data Scientist": 980}
+    "between1And3": {"Юрист": 320, "Тестировщик": 450, "Копирайтер": 280, "Информационная безопасность": 540, "Data Scientist": 410}
 }
 
-# Базовые ИИ-риски и тренды для профессий
 PROFEESION_TRENDS = {
     "Юрист (Правоведение)": {"ai_impact": 0.15, "market_growth": 0.02},
     "Тестировщик ПО": {"ai_impact": 0.12, "market_growth": 0.05},
@@ -35,21 +33,34 @@ PROFEESION_TRENDS = {
     "Дефолт": {"ai_impact": 0.08, "market_growth": 0.05}
 }
 
-def get_hh_vacancies_count(keyword, area_id, experience, fallback_key):
+# Умная функция запроса к API, которая сама убирает фильтры, если вакансий нет
+def get_hh_vacancies_smart(keyword, area_id, experience=None):
     url = "https://hh.ru"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    params = {"text": keyword, "area": area_id, "experience": experience, "per_page": 1}
+    
+    # Попытка 1: Запрос с учетом выбранного опыта
+    params = {"text": keyword, "area": area_id, "per_page": 1}
+    if experience:
+        params["experience"] = experience
+        
     try:
         response = requests.get(url, headers=headers, params=params, timeout=5)
         if response.status_code == 200:
-            found_vacancies = response.json().get("found", 0)
-            if found_vacancies > 0:
-                return found_vacancies
-        return FALLBACK_DATA.get(experience, {}).get(fallback_key, 100)
+            found = response.json().get("found", 0)
+            if found > 0:
+                return found
+                
+        # Попытка 2: Если с опытом выдало 0 (как со сварщиком), пробуем искать без фильтра опыта
+        if experience:
+            params.pop("experience", None)
+            response = requests.get(url, headers=headers, params=params, timeout=5)
+            if response.status_code == 200:
+                return response.json().get("found", 0)
     except Exception:
-        return FALLBACK_DATA.get(experience, {}).get(fallback_key, 100)
+        pass
+    return 0
 
 def get_status_logic(vacancies, resumes, students):
     if vacancies <= 0:
@@ -75,7 +86,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("⏳ Временной горизонт")
 horizon = st.sidebar.slider("Горизонт планирования (лет до выпуска):", min_value=0, max_value=4, value=0)
 
-# --- РАСЧЕТ ПРОГНОЗА ПО ГОТОВЫМ НАПРАВЛЕНИЯМ ---
+# --- ТАБЛИЦА ГОТОВЫХ НАПРАВЛЕНИЙ ---
 st.header(f"📊 Прогноз востребованности через {horizon} л. ({selected_city})")
 
 professions_config = [
@@ -90,9 +101,11 @@ dynamic_results = []
 
 with st.spinner('Расчет прогностических моделей...'):
     for prof in professions_config:
-        base_vacancies = get_hh_vacancies_count(prof["query"], selected_area_id, exp_api_value, prof["fb_key"])
+        base_vacancies = get_hh_vacancies_smart(prof["query"], selected_area_id, exp_api_value)
+        if base_vacancies == 0:
+            base_vacancies = FALLBACK_DATA.get(exp_api_value, {}).get(prof["fb_key"], 100)
+            
         trends = PROFEESION_TRENDS.get(prof["name"], PROFEESION_TRENDS["Дефолт"])
-        
         yearly_factor = 1.0 - trends["ai_impact"] + trends["market_growth"]
         predicted_vacancies = int(base_vacancies * (yearly_factor ** horizon))
         if predicted_vacancies < 1:
@@ -120,60 +133,51 @@ st.table(df_dynamic)
 
 st.markdown("---")
 
-# --- ИНТЕРАКТИВНЫЙ СИМУЛЯТОР С ПРЕДПРОВЕРКОЙ ВВОДА ---
+# --- СИМУЛЯТОР С ГАРАНТИРОВАННЫМ ПОИСКОМ ---
 st.header("🎛️ Симулятор влияния ИИ на специальность")
 st.caption("Проверьте любую профессию на устойчивость к искусственному интеллекту.")
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    # Изначально строка пустая, чтобы спровоцировать осознанный ввод со стороны пользователя
     prof_keyword = st.text_input("Профессия для теста (например: Бухгалтер, Дизайнер):", value="")
 with col2:
     ai_risk = st.slider("Уровень угрозы со стороны ИИ (% замещения задач в год):", 0, 50, 15)
 with col3:
     v_students = st.slider("План набора студентов на 1 курс:", 10, 300, 60)
 
-# Кнопка для старта — запрос к API пойдет только после её нажатия
 btn_calc = st.button("🚀 Рассчитать прогноз по ИИ")
 
-# Логика предпроверки строки ввода
 if btn_calc:
     clean_keyword = prof_keyword.strip()
     
-    # 1. Защита от слишком коротких и бессмысленных слов
-    if len(clean_keyword) < 4:
-        st.warning("⚠️ Пожалуйста, введите корректное и полное название профессии (минимум 4 символа).")
+    if len(clean_keyword) < 3:
+        st.warning("⚠️ Пожалуйста, введите название профессии (минимум 3 символа).")
     else:
-        with st.spinner(f'Выполняю реальный запрос на HH.ru для "{clean_keyword}"...'):
-            
-            # Изменяем логику: для симулятора передаем специальный маркер, чтобы не брать ложный бэкап
-            url = "https://hh.ru"
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            params = {"text": clean_keyword, "area": selected_area_id, "experience": exp_api_value, "per_page": 1}
-            
-            try:
-                response = requests.get(url, headers=headers, params=params, timeout=5)
-                sim_base_vacancies = response.json().get("found", 0) if response.status_code == 200 else 0
-            except Exception:
-                sim_base_vacancies = 0
+        with st.spinner(f'Выполняю сквозной поиск для "{clean_keyword}"...'):
+            # Запрашиваем общий объем рынка по этой профессии вообще БЕЗ жестких фильтров опыта
+            sim_base_vacancies = get_hh_vacancies_smart(clean_keyword, selected_area_id, experience=None)
 
-            # 2. Если HH честно вернул 0 — значит такой профессии нет, останавливаем расчет
             if sim_base_vacancies == 0:
-                st.error(f"❌ Профессия '{clean_keyword}' не найдена в базе вакансий HeadHunter для региона {selected_city}. Проверьте правильность написания.")
+                st.error(f"❌ Профессия '{clean_keyword}' не найдена на рынке труда региона {selected_city}. Проверьте написание.")
             else:
-                # Расчет будущего, если вакансии реально найдены
-                sim_future_vacancies = int(sim_base_vacancies * ((1.0 - (ai_risk/100)) ** horizon))
+                # Берем условную долю вакансий, доступную новичкам
+                junior_vacancies = int(sim_base_vacancies * 0.20) if sim_base_vacancies > 10 else sim_base_vacancies
+                if junior_vacancies < 1:
+                    junior_vacancies = 1
+
+                # Расчет будущего
+                sim_future_vacancies = int(junior_vacancies * ((1.0 - (ai_risk/100)) ** horizon))
                 if sim_future_vacancies < 1:
                     sim_future_vacancies = 1
 
-                sim_resumes = int(sim_base_vacancies * 3.5)
+                sim_resumes = int(junior_vacancies * 4)
                 if horizon > 0:
                     sim_resumes = int(sim_resumes * (1.1 ** horizon))
 
                 sim_index, sim_status, alert_type = get_status_logic(sim_future_vacancies, sim_resumes, v_students)
 
-                st.subheader(f"Результат симуляции для '{clean_keyword}' к моменту выпуска:")
-                st.markdown(f"* Вакансий сейчас на рынке: **{sim_base_vacancies}** ➔ Ожидается через {horizon} лет: **{sim_future_vacancies}**")
+                st.subheader(f"Результат симуляции для '{clean_keyword}':")
+                st.markdown(f"* Всего активных вакансий в регионе: **{sim_base_vacancies}**")
                 st.markdown(f"* Прогнозный Индекс Нужности: **{sim_index}**")
 
                 if alert_type == "success":
@@ -182,6 +186,5 @@ if btn_calc:
                     st.warning(sim_status)
                 else:
                     st.error(sim_status)
-
 else:
-    st.info("💡 Введите название интересующей профессии выше и нажмите кнопку «Рассчитать прогноз по ИИ», чтобы запустить симуляцию.")
+    st.info("💡 Введите название профессии и нажмите кнопку для расчета прогноза.")
